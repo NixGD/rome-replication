@@ -1,13 +1,15 @@
 # File written by mlab TAs, with modifications by Tony Wang and Nicholas Goldowsky-Dill
 
-from dataclasses import dataclass
-import einops
 import math
+from collections import namedtuple
+from dataclasses import dataclass
+from typing import Optional
+
+import einops
 import torch
-from torch import nn
 import torch.nn.functional as F
 import transformers
-from typing import Optional
+from torch import nn
 
 import gpt_tests
 
@@ -141,6 +143,9 @@ class GPT2Output:
     final_encoding: torch.Tensor
     all_logits: torch.Tensor
 
+Patch = namedtuple('Patch', ['token', 'layer', 'value'])
+Corruption = namedtuple('Corruption', ['end_position', 'noise_std'], defaults=[0.1])
+
 
 class GPT2(nn.Module):
     def __init__(
@@ -152,6 +157,7 @@ class GPT2(nn.Module):
         max_position_embeddings,
         dropout,
         layer_norm_epsilon,
+        tokenizer=None,
         use_cache=False,
     ):
         super().__init__()
@@ -171,7 +177,10 @@ class GPT2(nn.Module):
         self.cache_size = (num_layers, num_heads, 0, 2 * head_size)
         self.clear_cache()
 
-        self.tokenizer = transformers.GPT2Tokenizer.from_pretrained("gpt2")
+        if tokenizer is None:
+            self.tokenizer = transformers.GPT2Tokenizer.from_pretrained("gpt2")
+        else:
+            self.tokenizer = tokenizer
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
 
@@ -223,19 +232,9 @@ class GPT2(nn.Module):
     def forward_corrupt_and_patch(
         self,
         input_ids: torch.tensor,
-        patch: bool = False,
-        patch_id: Optional[int] = None,
-        patch_layer: Optional[int] = None,
-        patch_value: Optional[torch.tensor] = None,
-        corrupt: bool = False,
-        corrupt_up_to: Optional[int] = None,
-        corrupt_noise_std: float = 1,
+        patch: Optional[Patch] = None,
+        corruption: Optional[Corruption] = None,
     ):
-        if patch:
-            assert patch_id is not None
-            assert patch_layer is not None
-            assert patch_value is not None
-
         batch, seq_len = input_ids.shape
         pos = torch.arange(seq_len).to(input_ids.device)
 
@@ -243,19 +242,26 @@ class GPT2(nn.Module):
         assert batch == 1
 
         token_enc = self.token_embedding(input_ids)
-        if corrupt:
-            assert corrupt_up_to is not None
-            noise = corrupt_noise_std * torch.randn((batch, corrupt_up_to, self.hidden_size))
-            zeros = torch.zeros((batch, seq_len-corrupt_up_to, self.hidden_size))
+        if corruption is not None:
+            noise = torch.randn(
+                (batch, corruption.end_position, self.hidden_size), device=token_enc.device
+            )
+            noise = corruption.noise_std * noise
+            zeros = torch.zeros(
+                (batch, seq_len - corruption.end_position, self.hidden_size),
+                device=token_enc.device,
+            )
             token_enc += torch.cat((noise, zeros), dim=1)
 
         enc = self.dropout(token_enc + self.pos_embedding(pos))
 
         for i, block in enumerate(self.blocks):
             enc = block(enc)
-            if patch and i == patch_layer:
-                assert enc[0][patch_id].shape == patch_value.shape, f"{enc[0][patch_id].shape}!={patch_value.shape}"
-                enc[0][patch_id] = patch_value
+            if patch is not None and patch.layer == i:
+                assert (
+                    enc[0][patch.token].shape == patch.value.shape
+                ), f"{enc[0][patch.token].shape}!={patch.value.shape}"
+                enc[0][patch.token] = patch.value
 
         self._enc = enc
         enc = self.ln(enc)
@@ -271,7 +277,7 @@ class GPT2(nn.Module):
         return torch.distributions.categorical.Categorical(logits=logits).sample()
 
     def generate(self, text, max_length=30, temperature=1.0, freq_penalty=2.0):
-        self.empty_cache()
+        self.clear_cache()
         input_ids = self.tokenizer(text).input_ids
         generated = []
         for i in range(max_length):
@@ -285,26 +291,34 @@ class GPT2(nn.Module):
                 break
         return self.tokenizer.decode(input_ids + generated)
 
+def _copy_weight_bias(mine, theirs, transpose=False):
+    if transpose:
+        mine.weight.copy_(theirs.weight.T)
+    else:
+        mine.weight.copy_(theirs.weight)
+    if mine.bias is not None:
+        mine.bias.copy_(theirs.bias)
 
-def load_weights(GPT2Class):
-    pretrained_gpt = gpt_tests.get_pretrained_gpt()
-    my_gpt = GPT2Class(
-        num_layers=12,
-        num_heads=12,
-        vocab_size=50257,
-        hidden_size=768,
-        max_position_embeddings=1024,
-        dropout=0.1,
-        layer_norm_epsilon=1e-5,
-    )
+def get_pretrained_gpt():
+    pretrained_gpt = transformers.AutoModelForCausalLM.from_pretrained("gpt2")
+    tokenizer = transformers.AutoTokenizer.from_pretrained("gpt2")
+    config = dict(num_layers=12, num_heads=12, vocab_size=50257, hidden_size=768,
+                  max_position_embeddings=1024, dropout=0.1, layer_norm_epsilon=1e-5)
+    my_gpt = GPT2(**config, tokenizer=tokenizer)
+    for p in my_gpt.parameters():
+        p.requires_grad = False
 
-    state_dict = {
-        mykey: v
-        for (k, v), mykey in zip(
-            pretrained_gpt.state_dict().items(), my_gpt.state_dict().keys()
-        )
-    }
-    my_gpt.load_state_dict(state_dict)
+    my_gpt.token_embedding.weight.copy_(pretrained_gpt.transformer.wte.weight)
+    my_gpt.pos_embedding.weight.copy_(pretrained_gpt.transformer.wpe.weight)
+    _copy_weight_bias(my_gpt.ln, pretrained_gpt.transformer.ln_f)
+
+    for my_block, hf_block in zip(my_gpt.blocks, pretrained_gpt.transformer.h):
+        _copy_weight_bias(my_block.ln1, hf_block.ln_1)
+        _copy_weight_bias(my_block.attn.qkv_proj, hf_block.attn.c_attn, transpose=True)
+        _copy_weight_bias(my_block.attn.output_proj, hf_block.attn.c_proj, transpose=True)
+        _copy_weight_bias(my_block.ln2, hf_block.ln_2)
+        _copy_weight_bias(my_block.linear1, hf_block.mlp.c_fc, transpose=True)
+        _copy_weight_bias(my_block.linear2, hf_block.mlp.c_proj, transpose=True)
     return my_gpt
 
 
