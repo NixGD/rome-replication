@@ -143,8 +143,9 @@ class GPT2Output:
     final_encoding: torch.Tensor
     all_logits: torch.Tensor
 
-Patch = namedtuple('Patch', ['token', 'layer', 'value'])
-Corruption = namedtuple('Corruption', ['end_position', 'noise_std'], defaults=[0.1])
+
+Patch = namedtuple("Patch", ["token", "layer", "value"])
+Corruption = namedtuple("Corruption", ["end_position", "noise_std"], defaults=[0.1])
 
 
 class GPT2(nn.Module):
@@ -244,7 +245,8 @@ class GPT2(nn.Module):
         token_enc = self.token_embedding(input_ids)
         if corruption is not None:
             noise = torch.randn(
-                (batch, corruption.end_position, self.hidden_size), device=token_enc.device
+                (batch, corruption.end_position, self.hidden_size),
+                device=token_enc.device,
             )
             noise = corruption.noise_std * noise
             zeros = torch.zeros(
@@ -276,13 +278,13 @@ class GPT2(nn.Module):
         logits = logits / temperature - freq_penalty * id_freqs
         return torch.distributions.categorical.Categorical(logits=logits).sample()
 
-    def generate(self, text, max_length=30, temperature=1.0, freq_penalty=2.0):
+    def generate(self, text, max_length=30, temperature=1.0, freq_penalty=2.0, device="cpu"):
         self.clear_cache()
         input_ids = self.tokenizer(text).input_ids
         generated = []
         for i in range(max_length):
             new_token = self.next_token(
-                torch.LongTensor(input_ids + generated),
+                torch.tensor(input_ids + generated, dtype=torch.long, device=device),
                 temperature=temperature,
                 freq_penalty=freq_penalty,
             )
@@ -290,6 +292,7 @@ class GPT2(nn.Module):
             if new_token == self.tokenizer.eos_token_id:
                 break
         return self.tokenizer.decode(input_ids + generated)
+
 
 def _copy_weight_bias(mine, theirs, transpose=False):
     if transpose:
@@ -299,11 +302,24 @@ def _copy_weight_bias(mine, theirs, transpose=False):
     if mine.bias is not None:
         mine.bias.copy_(theirs.bias)
 
-def get_pretrained_gpt():
-    pretrained_gpt = transformers.AutoModelForCausalLM.from_pretrained("gpt2")
-    tokenizer = transformers.AutoTokenizer.from_pretrained("gpt2")
-    config = dict(num_layers=12, num_heads=12, vocab_size=50257, hidden_size=768,
-                  max_position_embeddings=1024, dropout=0.1, layer_norm_epsilon=1e-5)
+
+def get_pretrained_gpt(size: str = "base"):
+    size_configs = {
+        "base": dict(num_layers=12, num_heads=12, hidden_size=768),
+        "medium": dict(num_layers=24, num_heads=16, hidden_size=1024),
+        "large": dict(num_layers=36, num_heads=20, hidden_size=1280),
+        "xl": dict(num_layers=48, num_heads=25, hidden_size=1600),
+    }
+    name = "gpt2" if size=="base" else f"gpt2-{size}"
+    pretrained_gpt = transformers.AutoModelForCausalLM.from_pretrained(name)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(name)
+    config = size_configs[size]
+    config.update(
+        vocab_size=50257,
+        max_position_embeddings=1024,
+        dropout=0.1,
+        layer_norm_epsilon=1e-5,
+    )
     my_gpt = GPT2(**config, tokenizer=tokenizer)
     for p in my_gpt.parameters():
         p.requires_grad = False
@@ -315,7 +331,9 @@ def get_pretrained_gpt():
     for my_block, hf_block in zip(my_gpt.blocks, pretrained_gpt.transformer.h):
         _copy_weight_bias(my_block.ln1, hf_block.ln_1)
         _copy_weight_bias(my_block.attn.qkv_proj, hf_block.attn.c_attn, transpose=True)
-        _copy_weight_bias(my_block.attn.output_proj, hf_block.attn.c_proj, transpose=True)
+        _copy_weight_bias(
+            my_block.attn.output_proj, hf_block.attn.c_proj, transpose=True
+        )
         _copy_weight_bias(my_block.ln2, hf_block.ln_2)
         _copy_weight_bias(my_block.linear1, hf_block.mlp.c_fc, transpose=True)
         _copy_weight_bias(my_block.linear2, hf_block.mlp.c_proj, transpose=True)
