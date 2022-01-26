@@ -7,16 +7,17 @@ from torch.utils.hooks import RemovableHandle
 
 class HookHandler:
     def __init__(self):
-        self.activations = {}
-        self.inputs = []
-        self.hook_handles: list[RemovableHandle] = []
+        self.reset_data()
 
     def reset(self):
         for h in self.hook_handles:
             h.remove()
+        self.reset_data()
 
+    def reset_data(self):
         self.activations = {}
         self.inputs = []
+        self.outputs = []
         self.hook_handles = []
 
     def __enter__(self):
@@ -50,4 +51,14 @@ class HookHandler:
         def fn(model, input, output):
             self.inputs.append(input[0].detach())
         
+        self.hook_handles.append(mod.register_forward_hook(fn))
+    
+    def add_save_input_output_hook(
+        self,
+        mod: nn.Module
+    ):
+        def fn(model, input, output):
+            self.inputs.append(input[0].detach())
+            self.outputs.append(output.detach())
+
         self.hook_handles.append(mod.register_forward_hook(fn))

@@ -12,6 +12,7 @@ import transformers
 from torch import nn
 
 import gpt_tests
+from utils import Corruption, Patch
 
 
 class UniAttention(nn.Module):
@@ -87,7 +88,6 @@ class UniAttention(nn.Module):
             return out, torch.cat([new_k, new_v], dim=-1)
         return out
 
-Patch = namedtuple("Patch", ["type", "token", "layer", "value"])
 
 class GPT2Block(nn.Module):
     def __init__(
@@ -169,7 +169,6 @@ class GPT2Output:
     final_encoding: torch.Tensor
     all_logits: torch.Tensor
 
-Corruption = namedtuple("Corruption", ["end_position", "noise_std"], defaults=[0.1])
 
 class GPT2(nn.Module):
     def __init__(
@@ -207,6 +206,8 @@ class GPT2(nn.Module):
             self.tokenizer = tokenizer
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
+
+        self.cached_covar_matricies = {}
 
     def clear_cache(self):
         self._cache_kv = torch.zeros(self.cache_size).to(self.ln.weight.device)
@@ -315,6 +316,12 @@ class GPT2(nn.Module):
                 break
         return self.tokenizer.decode(input_ids + generated)
 
+    def cache_covar_matrix(self, layer, C):
+        self.cached_covar_matricies[layer] = C
+    
+    def get_cached_covar_matrix(self, layer):
+        return self.cached_covar_matricies.get(layer)
+
 
 def _copy_weight_bias(mine, theirs, transpose=False):
     if transpose:
@@ -342,15 +349,15 @@ def get_pretrained_gpt(size: str = "base"):
         dropout=0.1,
         layer_norm_epsilon=1e-5,
     )
-    my_gpt = GPT2(**config, tokenizer=tokenizer)
-    for p in my_gpt.parameters():
+    copy_gpt = GPT2(**config, tokenizer=tokenizer)
+    for p in copy_gpt.parameters():
         p.requires_grad = False
 
-    my_gpt.token_embedding.weight.copy_(pretrained_gpt.transformer.wte.weight)
-    my_gpt.pos_embedding.weight.copy_(pretrained_gpt.transformer.wpe.weight)
-    _copy_weight_bias(my_gpt.ln, pretrained_gpt.transformer.ln_f)
+    copy_gpt.token_embedding.weight.copy_(pretrained_gpt.transformer.wte.weight)
+    copy_gpt.pos_embedding.weight.copy_(pretrained_gpt.transformer.wpe.weight)
+    _copy_weight_bias(copy_gpt.ln, pretrained_gpt.transformer.ln_f)
 
-    for my_block, hf_block in zip(my_gpt.blocks, pretrained_gpt.transformer.h):
+    for my_block, hf_block in zip(copy_gpt.blocks, pretrained_gpt.transformer.h):
         _copy_weight_bias(my_block.ln1, hf_block.ln_1)
         _copy_weight_bias(my_block.attn.qkv_proj, hf_block.attn.c_attn, transpose=True)
         _copy_weight_bias(
@@ -359,7 +366,14 @@ def get_pretrained_gpt(size: str = "base"):
         _copy_weight_bias(my_block.ln2, hf_block.ln_2)
         _copy_weight_bias(my_block.linear1, hf_block.mlp.c_fc, transpose=True)
         _copy_weight_bias(my_block.linear2, hf_block.mlp.c_proj, transpose=True)
-    return my_gpt
+
+    # copying in the weights the way above messes with the model in a way I don't
+    # fully understand -- I was running into issues where the not everything was
+    # on the right device during backwards. Copying the statedict into a fresh model
+    # seems to fix it. 
+    new_gpt = GPT2(**config, tokenizer=tokenizer)
+    new_gpt.load_state_dict(copy_gpt.state_dict())
+    return new_gpt
 
 
 def bert_vs_gpt(gpt, bert):
