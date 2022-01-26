@@ -87,6 +87,7 @@ class UniAttention(nn.Module):
             return out, torch.cat([new_k, new_v], dim=-1)
         return out
 
+Patch = namedtuple("Patch", ["type", "token", "layer", "value"])
 
 class GPT2Block(nn.Module):
     def __init__(
@@ -110,8 +111,11 @@ class GPT2Block(nn.Module):
         past_key_values=None,
         return_key_values=False,
         return_headwise=False,
+        patch: Patch = None,
     ):
         assert not (return_key_values and return_headwise)
+        assert not (return_key_values and (patch is not None))
+        assert not (return_headwise and (patch is not None))
 
         if return_key_values:
             attn_output, new_key_values = self.attn(
@@ -122,6 +126,7 @@ class GPT2Block(nn.Module):
             x = x + attn_output
             x = x + self.dropout(self.linear2(F.gelu(self.linear1(self.ln2(x)))))
             return x, new_key_values
+        
         elif return_headwise:
             attn_output, attn_headwise = self.attn(
                 self.ln1(x),
@@ -131,6 +136,27 @@ class GPT2Block(nn.Module):
             mlp_out = self.dropout(self.linear2(F.gelu(self.linear1(self.ln2(x)))))
             out_headwise = torch.cat((attn_headwise, mlp_out.unsqueeze(1)), dim=1)
             return x + mlp_out, out_headwise
+        
+        elif patch is not None:
+            assert patch.type in ["act", "attn", "mlp"]
+            
+            # attn
+            attn_out = self.attn(self.ln1(x))
+            if patch.type == "attn":
+                attn_out[0, patch.token, :] = patch.value
+            x = x + attn_out
+
+            # mlp
+            mlp_out = self.dropout(self.linear2(F.gelu(self.linear1(self.ln2(x)))))
+            if patch.type == "mlp":
+                mlp_out[0, patch.token, :] = patch.value
+            x = x + mlp_out
+            
+            if patch.type == "act":
+                x[0, patch.token, :] = patch.value
+
+            return x
+
         else:
             x = x + self.attn(self.ln1(x))
             x = x + self.dropout(self.linear2(F.gelu(self.linear1(self.ln2(x)))))
@@ -143,10 +169,7 @@ class GPT2Output:
     final_encoding: torch.Tensor
     all_logits: torch.Tensor
 
-
-Patch = namedtuple("Patch", ["token", "layer", "value"])
 Corruption = namedtuple("Corruption", ["end_position", "noise_std"], defaults=[0.1])
-
 
 class GPT2(nn.Module):
     def __init__(
@@ -260,11 +283,10 @@ class GPT2(nn.Module):
         for i, block in enumerate(self.blocks):
             enc = block(enc)
             if patch is not None and patch.layer == i:
-                assert (
-                    enc[0][patch.token].shape == patch.value.shape
-                ), f"{enc[0][patch.token].shape}!={patch.value.shape}"
-                enc[0][patch.token] = patch.value
-
+                enc = block(enc, patch=patch)
+            else:
+                enc = block(enc)
+                
         self._enc = enc
         enc = self.ln(enc)
         logits = torch.einsum("bnl, vl -> bnv", enc, self.token_embedding.weight)
