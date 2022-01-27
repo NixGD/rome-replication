@@ -114,3 +114,19 @@ def rome(model: GPT2, fact: Fact,  new_obj: str, layer: int, subj_pos: int = -1)
 
     W_hat = calcuate_new_weights(W, C, k_star, v_star)
     return W_hat
+
+
+class ModifyWeights(HookHandler):
+    def __init__(self, model, layer, new_weights):
+        super().__init__()
+        self.model = model
+        self.layer = layer
+        self.new_weights = new_weights
+
+    def __enter__(self):
+        linear = self.model.blocks[self.layer].linear2
+        self.add_hook(linear, get_edit_hook(self.new_weights))
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        self.reset()
+        # print("All hooks removed!")
