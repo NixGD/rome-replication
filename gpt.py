@@ -12,7 +12,7 @@ import transformers
 from torch import nn
 
 import gpt_tests
-from utils import Corruption, Patch
+from utils import Corruption
 
 
 class UniAttention(nn.Module):
@@ -111,11 +111,8 @@ class GPT2Block(nn.Module):
         past_key_values=None,
         return_key_values=False,
         return_headwise=False,
-        patch: Patch = None,
     ):
         assert not (return_key_values and return_headwise)
-        assert not (return_key_values and (patch is not None))
-        assert not (return_headwise and (patch is not None))
 
         if return_key_values:
             attn_output, new_key_values = self.attn(
@@ -136,23 +133,6 @@ class GPT2Block(nn.Module):
             mlp_out = self.dropout(self.linear2(F.gelu(self.linear1(self.ln2(x)))))
             out_headwise = torch.cat((attn_headwise, mlp_out.unsqueeze(1)), dim=1)
             return x + mlp_out, out_headwise
-
-        elif patch is not None:
-            assert patch.type in ["attn", "mlp"]
-
-            # attn
-            attn_out = self.attn(self.ln1(x))
-            if patch.type == "attn":
-                attn_out[0, patch.token, :] = patch.value
-            x = x + attn_out
-
-            # mlp
-            mlp_out = self.dropout(self.linear2(F.gelu(self.linear1(self.ln2(x)))))
-            if patch.type == "mlp":
-                mlp_out[0, patch.token, :] = patch.value
-            x = x + mlp_out
-
-            return x
 
         else:
             x = x + self.attn(self.ln1(x))
@@ -251,10 +231,9 @@ class GPT2(nn.Module):
             logits=logits[:, -1, :], final_encoding=enc[:, -1, :], all_logits=logits
         )
 
-    def forward_corrupt_and_patch(
+    def forward_corrupt(
         self,
         input_ids: torch.tensor,
-        patch: Optional[Patch] = None,
         corruption: Optional[Corruption] = None,
     ):
         batch, seq_len = input_ids.shape
@@ -280,10 +259,6 @@ class GPT2(nn.Module):
 
         for i, block in enumerate(self.blocks):
             enc = block(enc)
-            if patch is not None and patch.layer == i:
-                enc = block(enc, patch=patch)
-            else:
-                enc = block(enc)
 
         self._enc = enc
         enc = self.ln(enc)
