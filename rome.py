@@ -113,15 +113,14 @@ def calcuate_new_weights(W: t.Tensor, C: t.Tensor, k_star: t.Tensor, v_star: t.T
     return W_hat
 
 
-def rome(model: GPT2, fact: Fact, new_obj: str, layer: int, subj_pos: int = -1):
+def rome(model: GPT2, fact: Fact, new_obj: str, layer: int, subj_pos: int = -1, reg_coeff=0.02):
     linear = model.blocks[layer].linear2
     W = linear.weight
     print("Estimating C")
     C = get_C(model, layer)
     k_star, z0 = get_k_star_and_z0(model, layer, fact, subj_pos)
     print("Estimating v_star")
-    v_star = get_z_star(model, layer, fact, new_obj, z0, subj_pos)
-
+    v_star = get_z_star(model, layer, fact, new_obj, z0, subj_pos, reg_coeff=reg_coeff)
     W_hat = calcuate_new_weights(W, C, k_star, v_star)
     return W_hat
 
