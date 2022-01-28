@@ -1,6 +1,7 @@
 import warnings
 from collections import namedtuple
 import torch as t
+import matplotlib.pyplot as plt
 
 Corruption = namedtuple("Corruption", ["end_position", "noise_std"], defaults=[0.1])
 Patch = namedtuple("Patch", ["type", "token", "layer", "value"])
@@ -48,6 +49,15 @@ def most_likely(model, fact, k=5):
         token = model.tokenizer.decode(top_ids[i])
         print(f"{repr(token).ljust(15)}{top_probs[i]:.2%}")
 
+
+def get_completion_prob(model, prompt, completion):
+    input_ids = encode_for_model(model, prompt)
+    model_out = model(input_ids)
+    target_probs = t.softmax(model_out.logits.squeeze(0), dim=0)
+    completion_id = encode_for_model(model, completion)[0]
+    assert completion_id.shape == (1,)
+    return target_probs[completion_id].item()
+    
 
 def get_correct_prob(out, correct_id):
     return t.softmax(out.logits[0], dim=-1)[correct_id].item()
@@ -102,3 +112,5 @@ def compare_generated(model, prompt, layer, W_hat, num=5, temperature=1, max_len
         hh.add_hook(layer, get_edit_hook(W_hat))
         for i in range(num):
             print_generated()
+
+
