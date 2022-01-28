@@ -6,7 +6,7 @@ import tqdm
 import datasets
 
 from gpt import GPT2
-from hook_handler import HookHandler
+from hook_handler import HookHandler, PatchActivations
 from utils import *
 
 
@@ -76,8 +76,8 @@ def get_z_star(
     with tqdm.trange(200) as thandle:
         for step in thandle:
             optim.zero_grad()
-            patch = Patch("mlp", subj_pos, layer, z)
-            out = model.forward_corrupt_and_patch(input_ids, patch=patch)
+            with PatchActivations(model.blocks[layer].linear2, subj_pos, z):
+                out = model.forward_corrupt(input_ids)
             new_obj_prob = out.logits.softmax(dim=-1)[0, new_obj_id]
             prob_loss = -t.log(new_obj_prob)
             reg_loss = t.linalg.vector_norm(z0 - z) * reg_coeff

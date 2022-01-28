@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from hook_handler import HookHandler, SaveAllActivations
+from hook_handler import SaveAllActivations, PatchActivations
 from gpt import GPT2
 from utils import *
 
@@ -31,24 +31,24 @@ def patch_effectiveness_array(
     assert patch_values.shape[:2] == (n_tokens, n_layers), patch_values.shape
     avg_prob = t.zeros((n_tokens, n_layers))
 
-    for token in range(n_tokens):
-        for layer in range(n_layers):
-            patch_value = patch_values[token, layer, :]
-            patch = Patch(type="act", token=token, layer=layer, value=patch_value)
-            prob = avg_evaluate(
-                model,
-                input_ids=input_ids,
-                correct_id=correct_id,
-                k=k,
-                patch=patch,
-                corruption=corruption,
-            )
-            avg_prob[token, layer] = prob
+    for token_idx in range(n_tokens):
+        for layer_idx in range(n_layers):
+            patch_value = patch_values[token_idx, layer_idx, :]
+            layer = model.blocks[layer_idx]
+            with PatchActivations(layer, token_idx, patch_value):
+                prob = avg_evaluate(
+                    model,
+                    input_ids=input_ids,
+                    correct_id=correct_id,
+                    k=k,
+                    corruption=corruption,
+                )
+            avg_prob[token_idx, layer_idx] = prob
 
     return avg_prob
 
 
-def layer_token_plot(values, input_ids, tokenizer, cbar = True, **kwargs):
+def layer_token_plot(values, input_ids, tokenizer, cbar=True, **kwargs):
     if isinstance(values, t.Tensor):
         values = values.detach().to("cpu")
     plt.matshow(values)
@@ -91,7 +91,12 @@ def graph_patched_probs(
 
     if plot:
         layer_token_plot(
-            avg_probs, input_ids, tokenizer, vmin=p_corrupted, vmax=p_baseline, cmap="Blues"
+            avg_probs,
+            input_ids,
+            tokenizer,
+            vmin=p_corrupted,
+            vmax=p_baseline,
+            cmap="Blues",
         )
 
     return avg_probs

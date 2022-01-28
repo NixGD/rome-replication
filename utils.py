@@ -3,7 +3,6 @@ from collections import namedtuple
 import torch as t
 
 Corruption = namedtuple("Corruption", ["end_position", "noise_std"], defaults=[0.1])
-Patch = namedtuple("Patch", ["type", "token", "layer", "value"])
 Fact = namedtuple("Fact", ["subject", "relation", "object"])
 
 from hook_handler import HookHandler
