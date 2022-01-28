@@ -94,7 +94,7 @@ class PatchActivations(HookHandler):
         self.activations = activations
 
     def patch_activations(self, model, input, output):
-        output[:, self.token_idx] = self.activations
+        output[0, self.token_idx] = self.activations
         return output
 
     def __enter__(self):
