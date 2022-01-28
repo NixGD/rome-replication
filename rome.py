@@ -13,18 +13,18 @@ from utils import *
 def estimate_C(model: GPT2, layer):
     linear = model.blocks[layer].linear2
 
-    dataset = datasets.load_dataset('wikitext', 'wikitext-2-v1', split='train')
-    dataset = dataset.map(lambda e: model.tokenizer(e['text'], truncation=True))
-    dataset.set_format(type='torch', columns=['text', 'input_ids'])
-    
+    dataset = datasets.load_dataset("wikitext", "wikitext-2-v1", split="train")
+    dataset = dataset.map(lambda e: model.tokenizer(e["text"], truncation=True))
+    dataset.set_format(type="torch", columns=["text", "input_ids"])
+
     with HookHandler() as hh:
         hh.add_save_input_hook(linear)
 
-        for input_ids in tqdm.tqdm(dataset['input_ids'][:2000]):
+        for input_ids in tqdm.tqdm(dataset["input_ids"][:2000]):
             if input_ids.shape[0] > 0:
                 input_ids = input_ids.unsqueeze(0).to(get_device(model))
                 model(input_ids)
-        
+
         input_tensor = t.cat(hh.inputs, dim=1).squeeze(0).T
     print(input_tensor.shape)
     C = t.cov(input_tensor)
@@ -49,10 +49,18 @@ def get_k_star_and_z0(model: GPT2, layer, fact, subj_pos):
         hh.add_save_input_output_hook(linear)
         input_ids = encode_for_model(model, fact.subject)
         model(input_ids)
-        return hh.inputs[0][0,subj_pos,:], hh.outputs[0][0,subj_pos,:]
+        return hh.inputs[0][0, subj_pos, :], hh.outputs[0][0, subj_pos, :]
 
 
-def get_z_star(model: GPT2, layer: int, fact: Fact, new_obj: str, z0: t.Tensor, subj_pos = -1):
+def get_z_star(
+    model: GPT2,
+    layer: int,
+    fact: Fact,
+    new_obj: str,
+    z0: t.Tensor,
+    subj_pos=-1,
+    reg_coeff=0.01,
+):
     tokenizer = model.tokenizer
     input_ids, subj_len, _ = fact_tensors(fact, tokenizer, get_device(model))
     new_obj_id = tokenizer.encode(new_obj, return_tensors="pt")
@@ -64,21 +72,23 @@ def get_z_star(model: GPT2, layer: int, fact: Fact, new_obj: str, z0: t.Tensor, 
 
     z = z0.clone().detach()
     z.requires_grad = True
-    optim = t.optim.Adam([z], lr=.5)
-    with tqdm.trange(50) as thandle:
+    optim = t.optim.Adam([z], lr=0.05)
+    with tqdm.trange(100) as thandle:
         for step in thandle:
             optim.zero_grad()
             patch = Patch("mlp", subj_pos, layer, z)
             out = model.forward_corrupt_and_patch(input_ids, patch=patch)
             new_obj_prob = out.logits.softmax(dim=-1)[0, new_obj_id]
-            loss = -t.log(new_obj_prob)
+            prob_loss = -t.log(new_obj_prob)
+            reg_loss = t.linalg.vector_norm(z0 - z) * reg_coeff
+            loss = prob_loss + reg_loss
             loss.backward()
             optim.step()
 
-            thandle.set_postfix(loss=loss.item(), prob=new_obj_prob.item())
-    return (z - model.blocks[layer].linear2.bias).detach() 
-
-
+            thandle.set_postfix(
+                loss=loss.item(), reg_loss=reg_loss.item(), prob=new_obj_prob.item()
+            )
+    return (z - model.blocks[layer].linear2.bias).detach()
 
 
 def calcuate_new_weights(W: t.Tensor, C: t.Tensor, k_star: t.Tensor, v_star: t.Tensor):
@@ -95,15 +105,15 @@ def calcuate_new_weights(W: t.Tensor, C: t.Tensor, k_star: t.Tensor, v_star: t.T
     u = t.linalg.solve(C, k_star)
     mat_1 = t.cat((W, v_star.unsqueeze(1)), dim=1)
 
-    I = t.eye(4*hidden_size, device=device)
+    I = t.eye(4 * hidden_size, device=device)
     first_rows = t.cat((I, k_star.unsqueeze(1)), dim=1)
     last_row = t.cat((-u.unsqueeze(0), t.zeros((1, 1), device=device)), dim=1)
     mat_2 = t.cat((first_rows, last_row), dim=0)
-    W_hat = (mat_1 @ t.linalg.inv(mat_2))[:, :4 * hidden_size]
+    W_hat = (mat_1 @ t.linalg.inv(mat_2))[:, : 4 * hidden_size]
     return W_hat
 
 
-def rome(model: GPT2, fact: Fact,  new_obj: str, layer: int, subj_pos: int = -1):
+def rome(model: GPT2, fact: Fact, new_obj: str, layer: int, subj_pos: int = -1):
     linear = model.blocks[layer].linear2
     W = linear.weight
     print("Estimating C")
