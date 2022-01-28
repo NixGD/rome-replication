@@ -126,7 +126,7 @@ class GPT2Block(nn.Module):
             x = x + attn_output
             x = x + self.dropout(self.linear2(F.gelu(self.linear1(self.ln2(x)))))
             return x, new_key_values
-        
+
         elif return_headwise:
             attn_output, attn_headwise = self.attn(
                 self.ln1(x),
@@ -136,10 +136,10 @@ class GPT2Block(nn.Module):
             mlp_out = self.dropout(self.linear2(F.gelu(self.linear1(self.ln2(x)))))
             out_headwise = torch.cat((attn_headwise, mlp_out.unsqueeze(1)), dim=1)
             return x + mlp_out, out_headwise
-        
+
         elif patch is not None:
-            assert patch.type in ["act", "attn", "mlp"]
-            
+            assert patch.type in ["attn", "mlp"]
+
             # attn
             attn_out = self.attn(self.ln1(x))
             if patch.type == "attn":
@@ -151,9 +151,6 @@ class GPT2Block(nn.Module):
             if patch.type == "mlp":
                 mlp_out[0, patch.token, :] = patch.value
             x = x + mlp_out
-            
-            if patch.type == "act":
-                x[0, patch.token, :] = patch.value
 
             return x
 
@@ -287,7 +284,7 @@ class GPT2(nn.Module):
                 enc = block(enc, patch=patch)
             else:
                 enc = block(enc)
-                
+
         self._enc = enc
         enc = self.ln(enc)
         logits = torch.einsum("bnl, vl -> bnv", enc, self.token_embedding.weight)
@@ -301,7 +298,9 @@ class GPT2(nn.Module):
         logits = logits / temperature - freq_penalty * id_freqs
         return torch.distributions.categorical.Categorical(logits=logits).sample()
 
-    def generate(self, text, max_length=30, temperature=1.0, freq_penalty=2.0, device="cpu"):
+    def generate(
+        self, text, max_length=30, temperature=1.0, freq_penalty=2.0, device="cpu"
+    ):
         self.clear_cache()
         input_ids = self.tokenizer(text).input_ids
         generated = []
@@ -318,7 +317,7 @@ class GPT2(nn.Module):
 
     def cache_covar_matrix(self, layer, C):
         self.cached_covar_matricies[layer] = C
-    
+
     def get_cached_covar_matrix(self, layer):
         return self.cached_covar_matricies.get(layer)
 
@@ -339,7 +338,7 @@ def get_pretrained_gpt(size: str = "base"):
         "large": dict(num_layers=36, num_heads=20, hidden_size=1280),
         "xl": dict(num_layers=48, num_heads=25, hidden_size=1600),
     }
-    name = "gpt2" if size=="base" else f"gpt2-{size}"
+    name = "gpt2" if size == "base" else f"gpt2-{size}"
     pretrained_gpt = transformers.AutoModelForCausalLM.from_pretrained(name)
     tokenizer = transformers.AutoTokenizer.from_pretrained(name)
     config = size_configs[size]
@@ -370,7 +369,7 @@ def get_pretrained_gpt(size: str = "base"):
     # copying in the weights the way above messes with the model in a way I don't
     # fully understand -- I was running into issues where the not everything was
     # on the right device during backwards. Copying the statedict into a fresh model
-    # seems to fix it. 
+    # seems to fix it.
     new_gpt = GPT2(**config, tokenizer=tokenizer)
     new_gpt.load_state_dict(copy_gpt.state_dict())
     return new_gpt
