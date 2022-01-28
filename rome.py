@@ -25,7 +25,7 @@ def estimate_C(model: GPT2, layer):
                 input_ids = input_ids.unsqueeze(0).to(get_device(model))
                 model(input_ids)
 
-        input_tensor = t.cat(hh.inputs, dim=1).squeeze(0).T
+        input_tensor = t.cat(hh.inputs, dim=1).to(get_device(model)).squeeze(0).T
     print(input_tensor.shape)
     C = t.cov(input_tensor)
     return C
@@ -102,11 +102,11 @@ def calcuate_new_weights(W: t.Tensor, C: t.Tensor, k_star: t.Tensor, v_star: t.T
 
     # assert W.size == [hidden_size, 4 * hidden_size]
 
-    u = t.linalg.solve(C, k_star)
+    u = t.linalg.solve(C, k_star.to(device))
     mat_1 = t.cat((W, v_star.unsqueeze(1)), dim=1)
 
     I = t.eye(4 * hidden_size, device=device)
-    first_rows = t.cat((I, k_star.unsqueeze(1)), dim=1)
+    first_rows = t.cat((I, k_star.unsqueeze(1).to(device)), dim=1)
     last_row = t.cat((-u.unsqueeze(0), t.zeros((1, 1), device=device)), dim=1)
     mat_2 = t.cat((first_rows, last_row), dim=0)
     W_hat = (mat_1 @ t.linalg.inv(mat_2))[:, : 4 * hidden_size]
