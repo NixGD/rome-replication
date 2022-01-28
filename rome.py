@@ -77,7 +77,7 @@ def get_z_star(
         for step in thandle:
             optim.zero_grad()
             with PatchActivations(model.blocks[layer].linear2, subj_pos, z):
-                out = model.forward_corrupt(input_ids)
+                out = model(input_ids)
             new_obj_prob = out.logits.softmax(dim=-1)[0, new_obj_id]
             prob_loss = -t.log(new_obj_prob)
             reg_loss = t.linalg.vector_norm(z0 - z) * reg_coeff
@@ -113,7 +113,14 @@ def calcuate_new_weights(W: t.Tensor, C: t.Tensor, k_star: t.Tensor, v_star: t.T
     return W_hat
 
 
-def rome(model: GPT2, fact: Fact, new_obj: str, layer: int, subj_pos: int = -1, reg_coeff=0.02):
+def rome(
+    model: GPT2,
+    fact: Fact,
+    new_obj: str,
+    layer: int,
+    subj_pos: int = -1,
+    reg_coeff=0.02,
+):
     linear = model.blocks[layer].linear2
     W = linear.weight
     print("Estimating C")

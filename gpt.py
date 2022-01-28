@@ -231,42 +231,6 @@ class GPT2(nn.Module):
             logits=logits[:, -1, :], final_encoding=enc[:, -1, :], all_logits=logits
         )
 
-    def forward_corrupt(
-        self,
-        input_ids: torch.tensor,
-        corruption: Optional[Corruption] = None,
-    ):
-        batch, seq_len = input_ids.shape
-        pos = torch.arange(seq_len).to(input_ids.device)
-
-        assert not self.use_cache
-        assert batch == 1
-
-        token_enc = self.token_embedding(input_ids)
-        if corruption is not None:
-            noise = torch.randn(
-                (batch, corruption.end_position, self.hidden_size),
-                device=token_enc.device,
-            )
-            noise = corruption.noise_std * noise
-            zeros = torch.zeros(
-                (batch, seq_len - corruption.end_position, self.hidden_size),
-                device=token_enc.device,
-            )
-            token_enc += torch.cat((noise, zeros), dim=1)
-
-        enc = self.dropout(token_enc + self.pos_embedding(pos))
-
-        for i, block in enumerate(self.blocks):
-            enc = block(enc)
-
-        self._enc = enc
-        enc = self.ln(enc)
-        logits = torch.einsum("bnl, vl -> bnv", enc, self.token_embedding.weight)
-        return GPT2Output(
-            logits=logits[:, -1, :], final_encoding=enc[:, -1, :], all_logits=logits
-        )
-
     def next_token(self, input_ids, temperature, freq_penalty=2.0):
         logits = self(input_ids.unsqueeze(0)).logits[0]
         id_freqs = torch.bincount(input_ids, minlength=self.vocab_size)
