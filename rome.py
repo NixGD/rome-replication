@@ -76,7 +76,7 @@ def get_z_star(
     with tqdm.trange(200) as thandle:
         for step in thandle:
             optim.zero_grad()
-            with PatchActivations(model.blocks[layer].mlp, subj_pos, z):
+            with PatchActivations(model.blocks[layer].linear2, subj_pos, z):
                 out = model.forward_corrupt(input_ids)
             new_obj_prob = out.logits.softmax(dim=-1)[0, new_obj_id]
             prob_loss = -t.log(new_obj_prob)
@@ -121,6 +121,7 @@ def rome(model: GPT2, fact: Fact, new_obj: str, layer: int, subj_pos: int = -1):
     k_star, z0 = get_k_star_and_z0(model, layer, fact, subj_pos)
     print("Estimating v_star")
     v_star = get_z_star(model, layer, fact, new_obj, z0, subj_pos)
+    print(v_star)
 
     W_hat = calcuate_new_weights(W, C, k_star, v_star)
     return W_hat
