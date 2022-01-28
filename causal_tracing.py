@@ -61,8 +61,9 @@ def layer_token_plot(values, input_ids, tokenizer, cbar = True, **kwargs):
 
 
 def graph_patched_probs(
-    model: GPT2, tokenizer, fact: Fact, k=3, noise_std=0.4, plot=True
+    model: GPT2, fact: Fact, k=3, noise_std=0.4, plot=True
 ):
+    tokenizer = model.tokenizer
     input_ids, subj_len, correct_id = fact_tensors(
         fact, tokenizer, device=get_device(model)
     )
