@@ -10,7 +10,7 @@ def run_baseline(model, input_ids, correct_id):
     with SaveAllActivations(model) as hh:
         logits = model(input_ids)
         correct_prob = get_correct_prob(logits, correct_id)
-        return hh.get_activations, correct_prob
+        return hh.get_activations(), correct_prob
 
 
 def avg_evaluate(model, input_ids, correct_id, k=5, **kwargs):

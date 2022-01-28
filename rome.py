@@ -59,7 +59,7 @@ def get_z_star(
     new_obj: str,
     z0: t.Tensor,
     subj_pos=-1,
-    reg_coeff=0.01,
+    reg_coeff=0.02,
 ):
     tokenizer = model.tokenizer
     input_ids, subj_len, _ = fact_tensors(fact, tokenizer, get_device(model))
@@ -73,7 +73,7 @@ def get_z_star(
     z = z0.clone().detach()
     z.requires_grad = True
     optim = t.optim.Adam([z], lr=0.05)
-    with tqdm.trange(100) as thandle:
+    with tqdm.trange(200) as thandle:
         for step in thandle:
             optim.zero_grad()
             patch = Patch("mlp", subj_pos, layer, z)
