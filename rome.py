@@ -31,14 +31,15 @@ def estimate_C(model: GPT2, layer):
     return C
 
 
-def get_C(model, layer):
+def get_C(model, layer, verbose=True):
     cached = model.get_cached_covar_matrix(layer)
     if cached is None:
         C = estimate_C(model, layer)
         model.cache_covar_matrix(layer, C)
         return C
     else:
-        print(f"Found cahced C for layer {layer}")
+        if verbose:
+            print(f"Found cahced C for layer {layer}")
         return cached
 
 
@@ -52,7 +53,7 @@ def get_k_star_and_z0(model: GPT2, layer, fact, subj_pos):
         return hh.inputs[0][0, subj_pos, :], hh.outputs[0][0, subj_pos, :]
 
 
-def get_z_star(
+def get_v_star(
     model: GPT2,
     layer: int,
     fact: Fact,
@@ -61,6 +62,11 @@ def get_z_star(
     subj_pos=-1,
     reg_coeff=0.02,
 ):
+    """
+    Notation point:
+    Following the paper -- we will call this variable z while minimizing the loss,
+    but once we find the optimial value we will denote it v_star.
+    """
     tokenizer = model.tokenizer
     input_ids, subj_len, _ = fact_tensors(fact, tokenizer, get_device(model))
     new_obj_id = tokenizer.encode(new_obj, return_tensors="pt")
@@ -113,14 +119,19 @@ def calcuate_new_weights(W: t.Tensor, C: t.Tensor, k_star: t.Tensor, v_star: t.T
     return W_hat
 
 
-def rome(model: GPT2, fact: Fact, new_obj: str, layer: int, subj_pos: int = -1, reg_coeff=0.02):
+def rome(model: GPT2, fact: Fact, new_obj: str, layer: int, subj_pos: int = -1, reg_coeff=0.02, v_star=None, verbose=True):
     linear = model.blocks[layer].linear2
     W = linear.weight
-    print("Estimating C")
-    C = get_C(model, layer)
+    if verbose:
+        print("Estimating C")
+    C = get_C(model, layer, verbose=verbose)
     k_star, z0 = get_k_star_and_z0(model, layer, fact, subj_pos)
-    print("Estimating v_star")
-    v_star = get_z_star(model, layer, fact, new_obj, z0, subj_pos, reg_coeff=reg_coeff)
+    if v_star is None:
+        if verbose:
+            print("Estimating v_star")
+        v_star = get_v_star(model, layer, fact, new_obj, z0, subj_pos, reg_coeff=reg_coeff)
+    elif verbose:
+        print("Using given v_star")
     W_hat = calcuate_new_weights(W, C, k_star, v_star)
     return W_hat
 
