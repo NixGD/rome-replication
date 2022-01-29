@@ -102,9 +102,41 @@ class PatchActivations(HookHandler):
         return self
 
 
+class PatchCorruption(HookHandler):
+    """
+    Patches corruption for the output of the embedding layer.
+    """
+
+    def __init__(self, embedding: nn.Module, corruption) -> None:
+        super().__init__()
+        self.embedding = embedding
+        self.end_position = corruption.end_position
+        self.noise_std = corruption.noise_std
+
+    def patch_corruption(self, model, input, token_enc):
+        batch, seq_len, hidden_size = token_enc.shape
+
+        noise = t.randn(
+            (
+                batch,
+                self.end_position,
+                hidden_size,
+            ),
+            device=token_enc.device,
+        )
+        noise = self.noise_std * noise
+        zeros = t.zeros(
+            (batch, seq_len - self.end_position, hidden_size),
+            device=token_enc.device,
+        )
+        token_enc += t.cat((noise, zeros), dim=1)
+        return token_enc
+
+    def __enter__(self):
+        self.add_hook(self.embedding, self.patch_corruption)
+        return self
+
+
 # TODO:
-# - Corruption
-# - Patch attention
-# - Patch MLP
 # - Return key values
 # - Return headwise

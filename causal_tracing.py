@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from hook_handler import SaveAllActivations, PatchActivations
+from hook_handler import PatchCorruption, SaveAllActivations, PatchActivations
 from gpt import GPT2
 from utils import *
 
@@ -18,7 +18,7 @@ def avg_evaluate(model, input_ids, correct_id, k=5, **kwargs):
     seeds = range(k)
     for seed in seeds:
         t.manual_seed(seed)
-        corrupt_out = model.forward_corrupt_and_patch(input_ids, **kwargs)
+        corrupt_out = model(input_ids, **kwargs)
         probs.append(get_correct_prob(corrupt_out, correct_id))
     return sum(probs) / k
 
@@ -35,14 +35,15 @@ def patch_effectiveness_array(
         for layer_idx in range(n_layers):
             patch_value = patch_values[token_idx, layer_idx, :]
             layer = model.blocks[layer_idx]
+            embedding_layer = model.token_embedding
             with PatchActivations(layer, token_idx, patch_value):
-                prob = avg_evaluate(
-                    model,
-                    input_ids=input_ids,
-                    correct_id=correct_id,
-                    k=k,
-                    corruption=corruption,
-                )
+                with PatchCorruption(embedding_layer, corruption):
+                    prob = avg_evaluate(
+                        model,
+                        input_ids=input_ids,
+                        correct_id=correct_id,
+                        k=k,
+                    )
             avg_prob[token_idx, layer_idx] = prob
 
     return avg_prob
@@ -60,9 +61,7 @@ def layer_token_plot(values, input_ids, tokenizer, cbar=True, **kwargs):
         plt.colorbar()
 
 
-def graph_patched_probs(
-    model: GPT2, fact: Fact, k=3, noise_std=0.4, plot=True
-):
+def graph_patched_probs(model: GPT2, fact: Fact, k=3, noise_std=0.4, plot=True):
     tokenizer = model.tokenizer
     input_ids, subj_len, correct_id = fact_tensors(
         fact, tokenizer, device=get_device(model)
@@ -70,13 +69,13 @@ def graph_patched_probs(
     activations, p_baseline = run_baseline(model, input_ids, correct_id)
 
     corruption = Corruption(subj_len, noise_std)
-    p_corrupted = avg_evaluate(
-        model,
-        input_ids=input_ids,
-        correct_id=correct_id,
-        k=k,
-        corruption=corruption,
-    )
+    with PatchCorruption(model.token_embedding, corruption):
+        p_corrupted = avg_evaluate(
+            model,
+            input_ids=input_ids,
+            correct_id=correct_id,
+            k=k,
+        )
 
     print(f"Input:")
     print_tokenized(input_ids[0], model.tokenizer)
